@@ -33,7 +33,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 DATA_ROOT = Path(__file__).resolve().parent.parent / "data" / "BenchmarkDatasets"
 
@@ -90,11 +89,17 @@ def file_path(split: str, k: int, normalization: str = "decpre", auction: bool =
 
 
 def read_raw(path: Path | str, dtype=np.float64) -> np.ndarray:
-    """Read one FI-2010 file as its stored (149, N) matrix."""
-    data = pd.read_csv(path, sep=r"\s+", header=None, dtype=dtype, engine="c").to_numpy()
-    if data.shape[0] != N_ROWS:
-        raise ValueError(f"{path}: expected {N_ROWS} rows, got {data.shape[0]}")
-    return data
+    """Read one FI-2010 file as its stored (149, N) matrix.
+
+    Parsed as one flat stream of numbers: pandas builds a column per event,
+    which takes minutes on the 250k-event training files.
+    """
+    with open(path) as f:
+        n_cols = len(f.readline().split())
+    values = np.fromfile(path, sep=" ")
+    if values.size != N_ROWS * n_cols:
+        raise ValueError(f"{path}: parsed {values.size} values, expected {N_ROWS} rows x {n_cols} columns")
+    return values.reshape(N_ROWS, n_cols).astype(dtype, copy=False)
 
 
 def find_stock_starts(lob: np.ndarray) -> np.ndarray:
