@@ -1,7 +1,12 @@
 """Train DeepLOB on FI-2010 and score it on the test days.
 
 Defaults follow the authors' PyTorch code: Adam at lr 1e-4, batch size 64,
-50 epochs, keeping the weights with the lowest validation loss.
+50 epochs, keeping the weights with the lowest validation loss. --patience stops
+early and --balanced-loss weights classes by inverse training frequency; the
+validation loss then uses the same weights, so model selection matches training.
+
+The paper itself describes different settings: --normalization zscore --lr 0.01
+--adam-eps 1 --batch-size 32 --select-on val_accuracy --patience 20 --epochs 200.
 
 Each run writes to runs/<name>/: best.pt (weights) and results.json (per-epoch
 history plus final test scores).
@@ -55,9 +60,10 @@ class DeviceWindows:
 
 
 @torch.no_grad()
-def evaluate(model: nn.Module, data: DeviceWindows, max_batches: int | None = None) -> dict:
+def evaluate(model: nn.Module, data: DeviceWindows, max_batches: int | None = None,
+             class_weights: torch.Tensor | None = None) -> dict:
     model.eval()
-    loss_fn = nn.CrossEntropyLoss(reduction="sum")
+    loss_fn = nn.CrossEntropyLoss(weight=class_weights, reduction="sum")
     total, preds, targets = 0.0, [], []
     for xb, yb in data.batches(1024, max_batches=max_batches):
         logits = model(xb)
@@ -65,8 +71,16 @@ def evaluate(model: nn.Module, data: DeviceWindows, max_batches: int | None = No
         preds.append(logits.argmax(1).cpu())
         targets.append(yb.cpu())
     y, p = torch.cat(targets).numpy(), torch.cat(preds).numpy()
-    return {"loss": total / len(y), "accuracy": accuracy_score(y, p),
-            "macro_f1": f1_score(y, p, average="macro"), "y": y, "pred": p}
+    denominator = len(y) if class_weights is None else class_weights.cpu().numpy()[y].sum()
+    return {"loss": float(total / denominator), "accuracy": accuracy_score(y, p),
+            "macro_f1": f1_score(y, p, average="macro"), "weighted_f1": f1_score(y, p, average="weighted"),
+            "y": y, "pred": p}
+
+
+def balanced_class_weights(targets: np.ndarray, device: torch.device) -> torch.Tensor:
+    """Inverse class frequency, scaled so a balanced dataset gets weights of 1."""
+    weights = len(targets) / (len(CLASS_NAMES) * np.bincount(targets, minlength=len(CLASS_NAMES)))
+    return torch.tensor(weights, dtype=torch.float32, device=device)
 
 
 def pick_device(name: str) -> torch.device:
@@ -82,31 +96,40 @@ def main() -> None:
     parser.add_argument("--k", type=int, default=10, choices=sorted(HORIZON_INDEX))
     parser.add_argument("--split", default="paper", choices=["paper", "by_day"])
     parser.add_argument("--respect-boundaries", action="store_true")
+    parser.add_argument("--normalization", default="decpre", choices=["decpre", "zscore", "minmax"])
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--adam-eps", type=float, default=1e-8)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--select-on", default="val_loss", choices=["val_loss", "val_accuracy"],
+                        help="validation score that picks the best weights")
+    parser.add_argument("--patience", type=int, help="stop after this many epochs without a better validation score")
+    parser.add_argument("--balanced-loss", action="store_true", help="weight classes by inverse training frequency")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-batches", type=int, help="cap batches per epoch and per evaluation (smoke tests)")
     parser.add_argument("--name", help="run directory name (default derived from the settings)")
     args = parser.parse_args()
 
-    name = args.name or f"deeplob_k{args.k}_{args.split}" + ("_bounded" if args.respect_boundaries else "")
+    name = args.name or (f"deeplob_k{args.k}_{args.split}" + ("_bounded" if args.respect_boundaries else "")
+                         + ("" if args.normalization == "decpre" else f"_{args.normalization}")
+                         + ("_balanced" if args.balanced_loss else "") + f"_seed{args.seed}")
     run_dir = RUNS_DIR / name
     run_dir.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(args.seed)
     device = pick_device(args.device)
 
-    splits = build_splits(args.split, args.respect_boundaries, args.k)
+    splits = build_splits(args.split, args.respect_boundaries, args.k, normalization=args.normalization)
     data = {split: DeviceWindows(ds, device) for split, ds in splits.items()}
     print(f"{name}: device={device}, windows " + ", ".join(f"{s}={len(d)}" for s, d in data.items()), flush=True)
 
     model = DeepLOB().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, eps=args.adam_eps)
+    class_weights = balanced_class_weights(splits["train"].targets, device) if args.balanced_loss else None
+    loss_fn = nn.CrossEntropyLoss(weight=class_weights)
     generator = torch.Generator().manual_seed(args.seed)
 
-    history, best_val = [], float("inf")
+    history, best_score, best_epoch = [], float("inf"), 0
     for epoch in range(1, args.epochs + 1):
         t = time.time()
         model.train()
@@ -119,10 +142,11 @@ def main() -> None:
             optimizer.step()
             train_loss += loss.item() * len(yb)
             n += len(yb)
-        val = evaluate(model, data["val"], args.max_batches)
-        improved = val["loss"] < best_val
+        val = evaluate(model, data["val"], args.max_batches, class_weights)
+        score = val["loss"] if args.select_on == "val_loss" else -val["accuracy"]
+        improved = score < best_score
         if improved:
-            best_val = val["loss"]
+            best_score, best_epoch = score, epoch
             torch.save(model.state_dict(), run_dir / "best.pt")
         history.append({"epoch": epoch, "train_loss": train_loss / n, "val_loss": val["loss"],
                         "val_accuracy": val["accuracy"], "val_macro_f1": val["macro_f1"],
@@ -130,17 +154,21 @@ def main() -> None:
         print(f"epoch {epoch:>3}  train loss {train_loss / n:.4f}  val loss {val['loss']:.4f}  "
               f"val acc {val['accuracy']:.3f}  val F1 {val['macro_f1']:.3f}  "
               f"{time.time() - t:.0f}s{'  *best' if improved else ''}", flush=True)
+        if args.patience is not None and epoch - best_epoch >= args.patience:
+            print(f"stopping: no better {args.select_on} for {args.patience} epochs", flush=True)
+            break
 
     model.load_state_dict(torch.load(run_dir / "best.pt", map_location=device))
     test = evaluate(model, data["test"], args.max_batches)
-    print(f"\ntest (best val-loss weights): accuracy {test['accuracy']:.4f}  macro-F1 {test['macro_f1']:.4f}")
+    print(f"\ntest (weights from epoch {best_epoch}): accuracy {test['accuracy']:.4f}  "
+          f"macro-F1 {test['macro_f1']:.4f}  weighted F1 {test['weighted_f1']:.4f}")
     print(classification_report(test["y"], test["pred"], labels=[0, 1, 2], target_names=CLASS_NAMES, digits=4))
     cm = confusion_matrix(test["y"], test["pred"], labels=[0, 1, 2])
     print("confusion matrix (rows = true, cols = predicted, order up/stationary/down):\n", cm)
 
-    results = {"args": vars(args), "history": history,
+    results = {"args": vars(args), "best_epoch": best_epoch, "history": history,
                "test": {"accuracy": test["accuracy"], "macro_f1": test["macro_f1"],
-                        "confusion_matrix": cm.tolist()}}
+                        "weighted_f1": test["weighted_f1"], "confusion_matrix": cm.tolist()}}
     (run_dir / "results.json").write_text(json.dumps(results, indent=2))
     print(f"saved {run_dir / 'best.pt'} and results.json")
 

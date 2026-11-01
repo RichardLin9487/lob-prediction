@@ -10,7 +10,9 @@ order book benchmark, working towards a replication of
 - [x] Windowed dataset matching the official DeepLOB setup
 - [x] Simple baselines
 - [x] DeepLOB model and training script
-- [ ] DeepLOB results compared with the paper
+- [x] DeepLOB results at k = 10 compared with the paper
+- [ ] Training with the settings described in the paper
+- [ ] DeepLOB results at k = 20 and k = 50
 
 ## Setup
 
@@ -69,7 +71,8 @@ validate on `Train_CF_7` (days 1–7, split 80/20) and test on days 8–10.
 out day 7 for validation and keeps every window inside one stock on one day.
 
 Most labels are "stationary" (about 70% of the test days at k = 10), so
-models are scored with macro-F1 as well as accuracy.
+models are scored with macro-F1 as well as accuracy. Weighted F1 is also
+reported for comparison with the paper.
 
 ## Baseline results
 
@@ -86,3 +89,24 @@ Test days 8–10, paper setup:
 
 The logistic regression only sees the latest snapshot, so these numbers are
 the floor that DeepLOB has to beat.
+
+## DeepLOB results
+
+Test days 8–10, paper setup, k = 10. Each row is the mean ± standard deviation
+of 3 seeds, trained with Adam at lr 1e-4, batch size 64 and early stopping
+after 5 epochs without a lower validation loss.
+
+| Version | Accuracy | Weighted F1 | Macro-F1 |
+| --- | --- | --- | --- |
+| DecPre | 0.812 ± 0.012 | 0.793 ± 0.020 | 0.665 ± 0.042 |
+| DecPre, class-weighted loss | 0.776 ± 0.004 | 0.785 ± 0.003 | 0.684 ± 0.005 |
+| Z-score | 0.818 ± 0.002 | 0.803 ± 0.003 | 0.683 ± 0.005 |
+| Paper (Setup 2) | 0.845 | 0.834 | not reported |
+
+The paper doesn't say how its F1 is averaged. Its DeepLOB recall equals its
+accuracy at every horizon, which points to weighted averaging, so weighted F1
+is the closer comparison.
+
+Three seeds is a small sample, and most of the DecPre spread comes from one
+weak seed. Macro-F1 doesn't clearly separate the versions. The class-weighted
+loss trades precision for recall on the up and down classes.
