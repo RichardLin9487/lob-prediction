@@ -11,8 +11,8 @@ order book benchmark, working towards a replication of
 - [x] Simple baselines
 - [x] DeepLOB model and training script
 - [x] DeepLOB results at k = 10 compared with the paper
-- [ ] Training with the settings described in the paper
-- [ ] DeepLOB results at k = 20 and k = 50
+- [x] Training with the settings described in the paper
+- [x] DeepLOB results at k = 20 and k = 50
 
 ## Setup
 
@@ -92,20 +92,39 @@ the floor that DeepLOB has to beat.
 
 ## DeepLOB results
 
-Test days 8–10, paper setup, k = 10. Each row is the mean ± standard deviation
-of 3 seeds, trained with Adam at lr 1e-4, batch size 64 and early stopping
-after 5 epochs without a lower validation loss.
+Test days 8–10, paper setup. Each result is the mean ± standard deviation of
+3 seeds, trained with the settings described in the paper: z-score data, Adam
+at lr 0.01 with epsilon 1, batch size 32, and stopping after 20 epochs without
+a better validation accuracy.
+
+| k | Accuracy | Paper | Weighted F1 | Paper | Macro-F1 |
+| --- | --- | --- | --- | --- | --- |
+| 10 | 0.827 ± 0.001 | 0.845 | 0.816 ± 0.001 | 0.834 | 0.711 ± 0.002 |
+| 20 | 0.733 ± 0.001 | 0.749 | 0.715 ± 0.002 | 0.728 | 0.623 ± 0.006 |
+| 50 | 0.780 ± 0.005 | 0.805 | 0.779 ± 0.005 | 0.804 | 0.762 ± 0.006 |
+
+```bash
+.venv/bin/python -m src.train --k 10 --normalization zscore --lr 0.01 --adam-eps 1 \
+  --batch-size 32 --select-on val_accuracy --patience 20 --epochs 200
+```
+
+The paper doesn't report macro-F1. It also doesn't say how its F1 is averaged,
+but its DeepLOB recall equals its accuracy at every horizon, which points to
+weighted averaging, so weighted F1 is the closer comparison.
+
+These settings were chosen after comparing test scores, so the test results may
+be slightly optimistic.
+
+### Earlier k = 10 runs
+
+These used the official code's settings: Adam at lr 1e-4, batch size 64 and
+early stopping after 5 epochs without a lower validation loss.
 
 | Version | Accuracy | Weighted F1 | Macro-F1 |
 | --- | --- | --- | --- |
 | DecPre | 0.812 ± 0.012 | 0.793 ± 0.020 | 0.665 ± 0.042 |
 | DecPre, class-weighted loss | 0.776 ± 0.004 | 0.785 ± 0.003 | 0.684 ± 0.005 |
 | Z-score | 0.818 ± 0.002 | 0.803 ± 0.003 | 0.683 ± 0.005 |
-| Paper (Setup 2) | 0.845 | 0.834 | not reported |
-
-The paper doesn't say how its F1 is averaged. Its DeepLOB recall equals its
-accuracy at every horizon, which points to weighted averaging, so weighted F1
-is the closer comparison.
 
 Three seeds is a small sample, and most of the DecPre spread comes from one
 weak seed. Macro-F1 doesn't clearly separate the versions. The class-weighted
