@@ -13,6 +13,7 @@ order book benchmark, working towards a replication of
 - [x] DeepLOB results at k = 10 compared with the paper
 - [x] Training with the settings described in the paper
 - [x] DeepLOB results at k = 20 and k = 50
+- [x] Backtest against the bid-ask spread
 
 ## Setup
 
@@ -50,6 +51,7 @@ Training writes the best weights and a results file to `runs/<run name>/`.
 | `src/baselines.py` | Majority-class and logistic regression baselines |
 | `src/model.py` | The DeepLOB network |
 | `src/train.py` | Training loop, validation and test scoring |
+| `src/backtest.py` | Trades the test-day predictions and measures returns before and after the bid-ask spread |
 
 ## About the data
 
@@ -142,3 +144,30 @@ batch size 64 and early stopping after 5 epochs without a lower validation loss.
 Three seeds is a small sample, and most of the DecPre spread comes from one
 weak seed. Macro-F1 doesn't clearly separate the versions. The class-weighted
 loss trades precision for recall on the up and down classes.
+
+## Backtest
+
+`python -m src.backtest` trades the clean-setup models on test days 8–10: buy on
+an "up" prediction, short on a "down" prediction, and close after a fixed number
+of snapshots. Returns are average basis points per trade. "Gross" trades at the
+mid-price; "net" buys at the best ask and sells at the best bid. Model figures
+are the mean of 3 seeds.
+
+| k | Hold | Model gross | Model net | Random gross | True labels gross | True labels net | Stock-days with gross > 0 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 10 | 1 | −0.27 | −16.87 | 0.00 | 0.33 | −16.24 | 2.0 / 15 |
+| 10 | 50 | 0.93 | −14.82 | −0.04 | 2.31 | −13.49 | 11.3 / 15 |
+| 20 | 1 | −0.14 | −16.71 | 0.00 | 1.12 | −15.29 | 3.0 / 15 |
+| 20 | 50 | 1.21 | −14.56 | 0.08 | 4.11 | −11.73 | 12.0 / 15 |
+| 50 | 1 | 0.01 | −16.11 | 0.00 | 0.45 | −15.71 | 8.0 / 15 |
+| 50 | 50 | 1.41 | −14.28 | 0.00 | 3.29 | −12.52 | 13.3 / 15 |
+
+The script also runs holds of 2, 5, 10, 20 and 100 snapshots. Every combination
+loses money after the spread, on every stock-day. The mean quoted spread is 15.6
+bps, while the largest gross return per trade is 1.41 bps for the model and 4.11
+bps for the true labels. The model has a small signal at longer holds, but this
+rule can't pay for crossing the spread.
+
+The test is optimistic: trades fill at the best quote at the prediction's own
+snapshot, with no fees, latency or market impact. It covers 3 days and 5 stocks,
+and the best figures are picked from 21 combinations. Limit orders aren't tested.
