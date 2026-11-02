@@ -92,21 +92,34 @@ the floor that DeepLOB has to beat.
 
 ## DeepLOB results
 
-Test days 8–10, paper setup. Each result is the mean ± standard deviation of
-3 seeds, trained with the settings described in the paper: z-score data, Adam
-at lr 0.01 with epsilon 1, batch size 32, and stopping after 20 epochs without
-a better validation accuracy.
+Test days 8–10. Each result is the mean ± standard deviation of 3 seeds, trained
+with the settings described in the paper: z-score data, Adam at lr 0.01 with
+epsilon 1, batch size 32, and stopping after 20 epochs without a better
+validation accuracy.
+
+The main results use the clean setup: train on days 1–6, validate on day 7, and
+keep every window inside one stock on one day.
 
 | k | Accuracy | Paper | Weighted F1 | Paper | Macro-F1 |
 | --- | --- | --- | --- | --- | --- |
-| 10 | 0.827 ± 0.001 | 0.845 | 0.816 ± 0.001 | 0.834 | 0.711 ± 0.002 |
-| 20 | 0.733 ± 0.001 | 0.749 | 0.715 ± 0.002 | 0.728 | 0.623 ± 0.006 |
-| 50 | 0.780 ± 0.005 | 0.805 | 0.779 ± 0.005 | 0.804 | 0.762 ± 0.006 |
+| 10 | 0.829 ± 0.002 | 0.845 | 0.820 ± 0.002 | 0.834 | 0.717 ± 0.002 |
+| 20 | 0.737 ± 0.002 | 0.749 | 0.720 ± 0.004 | 0.728 | 0.630 ± 0.006 |
+| 50 | 0.779 ± 0.005 | 0.805 | 0.778 ± 0.004 | 0.804 | 0.761 ± 0.004 |
 
 ```bash
-.venv/bin/python -m src.train --k 10 --normalization zscore --lr 0.01 --adam-eps 1 \
-  --batch-size 32 --select-on val_accuracy --patience 20 --epochs 200
+.venv/bin/python -m src.train --k 10 --split by_day --respect-boundaries \
+  --normalization zscore --lr 0.01 --adam-eps 1 --batch-size 32 \
+  --select-on val_accuracy --patience 20 --epochs 200
 ```
+
+The same settings on the default ("paper") setup score about the same, so the
+results don't depend on windows that cross stock or day boundaries:
+
+| k | Accuracy | Weighted F1 | Macro-F1 |
+| --- | --- | --- | --- |
+| 10 | 0.827 ± 0.001 | 0.816 ± 0.001 | 0.711 ± 0.002 |
+| 20 | 0.733 ± 0.001 | 0.715 ± 0.002 | 0.623 ± 0.006 |
+| 50 | 0.780 ± 0.005 | 0.779 ± 0.005 | 0.762 ± 0.006 |
 
 The paper doesn't report macro-F1. It also doesn't say how its F1 is averaged,
 but its DeepLOB recall equals its accuracy at every horizon, which points to
@@ -117,8 +130,8 @@ be slightly optimistic.
 
 ### Earlier k = 10 runs
 
-These used the official code's settings: Adam at lr 1e-4, batch size 64 and
-early stopping after 5 epochs without a lower validation loss.
+These used the default setup and the official code's settings: Adam at lr 1e-4,
+batch size 64 and early stopping after 5 epochs without a lower validation loss.
 
 | Version | Accuracy | Weighted F1 | Macro-F1 |
 | --- | --- | --- | --- |
