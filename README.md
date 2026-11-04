@@ -52,6 +52,8 @@ Training writes the best weights and a results file to `runs/<run name>/`.
 | `src/model.py` | The DeepLOB network |
 | `src/train.py` | Training loop, validation and test scoring |
 | `src/backtest.py` | Trades the test-day predictions and measures returns before and after the bid-ask spread |
+| `src/record_lob.py` | Records live Binance.US order book snapshots into hourly compressed CSV files |
+| `deploy/setup_recorder.sh` | Installs the recorder as a service on an Ubuntu or Debian cloud VM |
 
 ## About the data
 
@@ -171,3 +173,54 @@ rule can't pay for crossing the spread.
 The test is optimistic: trades fill at the best quote at the prediction's own
 snapshot, with no fees, latency or market impact. It covers 3 days and 5 stocks,
 and the best figures are picked from 21 combinations. Limit orders aren't tested.
+
+## Recording live order books
+
+`src/record_lob.py` records the top 10 levels of Binance.US order books, about
+3 to 4 snapshots a second per pair, in the same column order as FI-2010. It
+needs `websocket-client` (`.venv/bin/pip install websocket-client`).
+
+```bash
+.venv/bin/python -m src.record_lob --symbols btcusdt btcusd ethusdt
+```
+
+Files go to `data/live/binanceus/<PAIR>/<date>/<HHMM>.csv.gz`, one per UTC hour.
+Each reconnect is logged, so gaps can be found later. A laptop loses data
+whenever it sleeps, so long recordings belong on an always-on machine.
+
+### On a cloud VM
+
+Use a VM in a US region, since Binance.US blocks most other countries. The
+recorder needs very little: the smallest Ubuntu or Debian VM is enough, and
+three pairs take about 15 MB of disk a day.
+
+From the project root on your own computer, with `vm` standing for the VM's SSH
+address (for example `user@203.0.113.5`):
+
+```bash
+ssh vm 'mkdir -p ~/lob-prediction/src ~/lob-prediction/deploy'
+scp src/record_lob.py vm:lob-prediction/src/
+scp deploy/setup_recorder.sh vm:lob-prediction/deploy/
+ssh vm 'bash ~/lob-prediction/deploy/setup_recorder.sh'
+```
+
+Or, from a shell on the VM (such as the browser SSH window a cloud console
+offers), take the code from GitHub:
+
+```bash
+sudo apt-get update && sudo apt-get install -y git
+git clone https://github.com/RichardLin9487/lob-prediction.git
+bash lob-prediction/deploy/setup_recorder.sh
+```
+
+The script installs Python, makes a 20-second test recording, and stops if that
+test records nothing. Otherwise it starts a `record-lob` service that restarts
+after crashes and reboots. To check it and copy finished files back:
+
+```bash
+ssh vm 'tail -n 3 ~/lob-prediction/data/live/record_lob.log'
+rsync -av --exclude '*.partial' vm:lob-prediction/data/live/binanceus/ data/live_vm/binanceus/
+```
+
+The copies go to `data/live_vm/` so they don't mix with files recorded locally,
+which use the same names.
